@@ -4,6 +4,7 @@ on:
     branches:
       - master # or the name of your main branch
       - dev
+      - test_branch
   pull_request:
     types: [opened, synchronize, reopened]
 jobs:
