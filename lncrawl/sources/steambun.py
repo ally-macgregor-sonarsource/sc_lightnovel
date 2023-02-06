@@ -57,4 +57,22 @@ class SteambunCrawler(Crawler):
         txt = p.text.strip().lower()
         return txt and txt != 'advertisement'
     # end def
+
+    def check_page(page):
+      if page is None:
+        print(page.test())
+
+      if page == None:
+        print(page.test())
+
+      if page is not None:
+        pass
+      else:
+        print(page.test())
+
+      if page != None:
+        pass
+      else:
+        print(page.test())
+    # end def
 # end class
