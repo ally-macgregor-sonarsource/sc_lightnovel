@@ -1,58 +1,54 @@
-# -*- coding: utf-8 -*-
-import logging
-import logging.config
 import os
-import random
+import subprocess
 from datetime import datetime
+from typing import Dict
 
 import discord
 
-from ...core.arguments import get_args
-from .config import signal
+from . import config as C
+from .config import logger
 from .message_handler import MessageHandler
-
-logger = logging.getLogger(__name__)
 
 
 def get_bot_version():
-    head_path = os.path.join('.git', 'ORIG_HEAD')
-    if not os.path.isfile(head_path):
-        from ...assets.version import get_value
-        return get_value
-    with open(head_path, 'r', encoding='utf8') as f:
-        return f.readline()[:7]
+    try:
+        result = subprocess.check_output(["git", "rev-list", "--count", "HEAD"])
+        return result.decode("utf-8")
+    except Exception:
+        from lncrawl.assets import version
+
+        return version.get_version()
 
 
 class DiscordBot(discord.Client):
     bot_version = get_bot_version()
 
     def __init__(self, *args, loop=None, **options):
-        options['shard_id'] = get_args().shard_id
-        options['shard_count'] = get_args().shard_count
-        options['heartbeat_timeout'] = 300
-        options['guild_subscriptions'] = False
-        options['fetch_offline_members'] = False
+        options["shard_id"] = C.shard_id
+        options["shard_count"] = C.shard_count
+        options["heartbeat_timeout"] = 300
+        options["guild_subscriptions"] = False
+        options["fetch_offline_members"] = False
+        self.handlers: Dict[str, MessageHandler] = {}
         super().__init__(*args, loop=loop, **options)
-    # end def
 
     def start_bot(self):
         self.bot_is_ready = False
-        os.environ['debug_mode'] = 'yes'
-        self.run(os.getenv('DISCORD_TOKEN'))
-    # end def
+        os.environ["debug_mode"] = "yes"
+        self.run(C.discord_token)
 
     async def on_ready(self):
         # Reset handler cache
         self.handlers = {}
 
-        print('Discord bot in online!')
-        activity = discord.Activity(name='for 🔥%s🔥 (%s)' % (signal, self.bot_version),
-                                    type=discord.ActivityType.watching)
-        await self.change_presence(activity=activity,
-                                   status=discord.Status.online)
+        print("Discord bot in online!")
+        activity = discord.Activity(
+            name="for 🔥%s🔥 (%s)" % (C.signal, self.bot_version),
+            type=discord.ActivityType.watching,
+        )
+        await self.change_presence(activity=activity, status=discord.Status.online)
 
         self.bot_is_ready = True
-    # end def
 
     async def on_message(self, message):
         if not self.bot_is_ready:
@@ -68,61 +64,67 @@ class DiscordBot(discord.Client):
             text = message.content
             if isinstance(message.channel, discord.abc.PrivateChannel):
                 await self.handle_message(message)
-            elif text.startswith(signal) and len(text.split(signal)) == 2:
-                uid = message.author.id
+            elif text.startswith(C.signal) and len(text.split(C.signal)) == 2:
+                uid = str(message.author.id)
+                async with message.channel.typing():
+                    await message.channel.send(
+                        f"Sending you a private message <@{uid}>"
+                    )
                 if uid in self.handlers:
                     self.handlers[uid].destroy()
-                # end if
-                await self.send_public_text(message, random.choice([
-                    "Sending you a private message",
-                ]))
-                await self.handle_message(message)
-            # end if
-        except IndexError as ex:
-            logger.exception('Index error reported', ex)
-        except Exception:
-            logger.exception('Something went wrong processing message')
-        # end try
-    # end def
 
-    async def send_public_text(self, message, text):
-        async with message.channel.typing():
-            await message.channel.send(text + (" <@%s>" % str(message.author.id)))
-    # end def
+                await self.handle_message(message)
+
+        except IndexError as ex:
+            logger.exception("Index error reported", ex)
+        except Exception:
+            logger.exception("Something went wrong processing message")
 
     async def handle_message(self, message):
         if self.is_closed():
             return
-        # end if
+
         try:
             uid = str(message.author.id)
-            logger.info("Processing message from %s", message.author.name)
-            if uid not in self.handlers:
-                self.handlers[uid] = MessageHandler(self)
-                await message.author.send(
-                    '-' * 25 + '\n' +
-                    ('Hello %s\n' % message.author.name) +
-                    '-' * 25 + '\n'
+            discriminator = message.author.discriminator
+            logger.info(
+                "Processing message from %s#%s", message.author.name, discriminator
+            )
+            if uid in self.handlers:
+                self.handlers[uid].process(message)
+            # elif len(self.handlers) > C.max_active_handles or discriminator not in C.vip_users_ids:
+            #     async with message.author.typing():
+            #         await message.author.send(
+            #             "Sorry! I am too busy processing requests of other users.\n"
+            #             "Please knock again in a few hours."
+            #         )
+            else:
+                logger.info(
+                    "New handler for %s#%s [%s]",
+                    message.author.name,
+                    discriminator,
+                    uid,
                 )
-                logger.info("New handler for %s", message.author.name)
-            # end if
-            self.handlers[uid].process(message)
-        except Exception as err:
-            logger.exception('While handling this message: %s', message)
-        # end try
-    # end def
+                self.handlers[uid] = MessageHandler(uid, self)
+                async with message.author.typing():
+                    await message.author.send(
+                        "-" * 25 + "\n" + f"Hello <@{uid}>\n" + "-" * 25 + "\n"
+                    )
+                self.handlers[uid].process(message)
+
+        except Exception:
+            logger.exception("While handling this message: %s", message)
 
     def cleanup_handlers(self):
         try:
             cur_time = datetime.now()
             for handler in self.handlers.values():
-                last_time = getattr(handler, 'last_activity', cur_time)
-                if (cur_time - last_time).days > 1:
+                if handler.is_busy():
+                    continue
+
+                last_time = getattr(handler, "last_activity", cur_time)
+                if (cur_time - last_time).seconds > C.session_retain_time_in_seconds:
                     handler.destroy()
-                # end if
-            # end for
+
         except Exception:
-            logger.exception('Failed to cleanup handlers')
-        # end try
-    # end def
-# end class
+            logger.exception("Failed to cleanup handlers")

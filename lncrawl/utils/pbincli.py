@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
-'''
+"""
 Source: https://github.com/r4sas/PBinCLI/blob/master/pbincli/format.py
-'''
+"""
 import json
+import logging
 import ntpath
 import os
-import sys
 import zlib
 from base64 import b64decode, b64encode
 from hashlib import sha256
@@ -14,7 +13,9 @@ from mimetypes import guess_type
 
 from base58 import b58decode, b58encode
 
-#-----------------------------------------------------------------------------#
+# -----------------------------------------------------------------------------#
+
+logger = logging.getLogger(__name__)
 
 
 class PBinCLIException(Exception):
@@ -22,8 +23,7 @@ class PBinCLIException(Exception):
 
 
 def PBinCLIError(message):
-    print("PBinCLI Error: {}".format(message), file=sys.stderr)
-    exit(1)
+    logger.warn("PBinCLI Error: {}".format(message))
 
 
 def path_leaf(path):
@@ -44,36 +44,26 @@ def check_writable(f):
 
 
 def json_encode(s):
-    return json.dumps(s, separators=(',', ':')).encode()
+    return json.dumps(s, separators=(",", ":")).encode()
 
 
 def validate_url(s):
-    if not s.endswith('/'):
+    if not s.endswith("/"):
         s = s + "/"
     return s
 
-#-----------------------------------------------------------------------------#
+
+# -----------------------------------------------------------------------------#
 
 
 # try import AES cipher and check if it has GCM mode (prevent usage of pycrypto)
 try:
     from Crypto.Cipher import AES
-    if not hasattr(AES, 'MODE_GCM'):
-        try:
-            from Cryptodome.Cipher import AES
-            from Cryptodome.Random import get_random_bytes
-        except ImportError:
-            PBinCLIError("AES GCM mode is not found in imported crypto module.\n" +
-                         "That can happen if you have installed pycrypto.\n\n" +
-                         "We tried to import pycryptodomex but it is not available.\n" +
-                         "Please install it via pip, if you still need pycrypto, by running:\n" +
-                         "\tpip install pycryptodomex\n" +
-                         "... otherwise use separate python environment or uninstall pycrypto:\n" +
-                         "\tpip uninstall pycrypto")
-    else:
-        from Crypto.Random import get_random_bytes
+    from Crypto.Random import get_random_bytes
 except ImportError:
-    PBinCLIError("Unable import pycryptodome")
+    PBinCLIError(
+        "pycryptodome not found.\n" "    pip install pycryptodome>=3.0.0,<4.0.0"
+    )
 
 
 CIPHER_ITERATION_COUNT = 100000
@@ -84,12 +74,12 @@ CIPHER_TAG_BITS = 128
 
 class PasteV2:
     def __init__(self, debug=False):
-        self._compression = 'zlib'
-        self._data = ''
-        self._text = ''
-        self._attachment = ''
-        self._attachment_name = ''
-        self._password = ''
+        self._compression = "zlib"
+        self._data = ""
+        self._text = ""
+        self._attachment = ""
+        self._attachment_name = ""
+        self._password = ""
         self._debug = debug
         self._iteration_count = CIPHER_ITERATION_COUNT
         self._salt_bytes = CIPHER_SALT_BYTES
@@ -105,19 +95,19 @@ class PasteV2:
 
     def setAttachment(self, path):
         check_readable(path)
-        with open(path, 'rb') as f:
+        with open(path, "rb") as f:
             contents = f.read()
             f.close()
         mime = guess_type(path, strict=False)[0]
 
         # MIME fallback
         if not mime:
-            mime = 'application/octet-stream'
+            mime = "application/octet-stream"
 
         if self._debug:
-            print("Filename:\t{}\nMIME-type:\t{}".format(path_leaf(path), mime))
+            logger.debug("Filename:\t{}\nMIME-type:\t{}".format(path_leaf(path), mime))
 
-        self._attachment = 'data:' + mime + ';base64,' + b64encode(contents).decode()
+        self._attachment = "data:" + mime + ";base64," + b64encode(contents).decode()
         self._attachment_name = path_leaf(path)
 
     def setCompression(self, comp):
@@ -127,9 +117,11 @@ class PasteV2:
         return self._text
 
     def getAttachment(self):
-        return [b64decode(self._attachment.split(',', 1)[1]), self._attachment_name] \
-            if self._attachment \
+        return (
+            [b64decode(self._attachment.split(",", 1)[1]), self._attachment_name]
+            if self._attachment
             else [False, False]
+        )
 
     def getJSON(self):
         return json_encode(self._data).decode()
@@ -153,11 +145,8 @@ class PasteV2:
             salt,
             dkLen=int(self._block_bits / 8),
             count=self._iteration_count,
-            prf=lambda password, salt: HMAC.new(
-                password,
-                salt,
-                SHA256
-            ).digest())
+            prf=lambda password, salt: HMAC.new(password, salt, SHA256).digest(),
+        )
 
     @classmethod
     def __initializeCipher(cls, key, iv, adata, tagsize):
@@ -173,52 +162,55 @@ class PasteV2:
             return b64encode(self._key)
 
     def __decompress(self, s):
-        if self._compression == 'zlib':
+        if self._compression == "zlib":
             # decompress data
             return zlib.decompress(s, -zlib.MAX_WBITS)
-        elif self._compression == 'none':
+        elif self._compression == "none":
             # nothing to do, just return original data
             return s
         else:
-            PBinCLIError('Unknown compression type provided in paste!')
+            PBinCLIError("Unknown compression type provided in paste!")
 
     def __compress(self, s):
-        if self._compression == 'zlib':
+        if self._compression == "zlib":
             # using compressobj as compress doesn't let us specify wbits
             # needed to get the raw stream without headers
             co = zlib.compressobj(wbits=-zlib.MAX_WBITS)
             return co.compress(s) + co.flush()
-        elif self._compression == 'none':
+        elif self._compression == "none":
             # nothing to do, just return original data
             return s
         else:
-            PBinCLIError('Unknown compression type provided!')
+            PBinCLIError("Unknown compression type provided!")
 
     def decrypt(self):
         # that is wrapper which running needed function regrading to paste version
-        iv = b64decode(self._data['adata'][0][0])
-        salt = b64decode(self._data['adata'][0][1])
+        iv = b64decode(self._data["adata"][0][0])
+        salt = b64decode(self._data["adata"][0][1])
 
-        self._iteration_count = self._data['adata'][0][2]
-        self._block_bits = self._data['adata'][0][3]
-        self._tag_bits = self._data['adata'][0][4]
+        self._iteration_count = self._data["adata"][0][2]
+        self._block_bits = self._data["adata"][0][3]
+        self._tag_bits = self._data["adata"][0][4]
         cipher_tag_bytes = int(self._tag_bits / 8)
 
         key = self.__deriveKey(salt)
 
         # Get compression type from received paste
-        self._compression = self._data['adata'][0][7]
+        self._compression = self._data["adata"][0][7]
 
-        cipher = self.__initializeCipher(key, iv, self._data['adata'], cipher_tag_bytes)
+        cipher = self.__initializeCipher(key, iv, self._data["adata"], cipher_tag_bytes)
         # Cut the cipher text into message and tag
-        cipher_text_tag = b64decode(self._data['ct'])
+        cipher_text_tag = b64decode(self._data["ct"])
         cipher_text = cipher_text_tag[:-cipher_tag_bytes]
         cipher_tag = cipher_text_tag[-cipher_tag_bytes:]
-        cipher_message = json_decode(self.__decompress(
-            cipher.decrypt_and_verify(cipher_text, cipher_tag)).decode())
+        cipher_message = json_decode(
+            self.__decompress(
+                cipher.decrypt_and_verify(cipher_text, cipher_tag)
+            ).decode()
+        )
 
-        self._text = cipher_message['paste'].encode()
+        self._text = cipher_message["paste"].encode()
 
-        if 'attachment' in cipher_message and 'attachment_name' in cipher_message:
-            self._attachment = cipher_message['attachment']
-            self._attachment_name = cipher_message['attachment_name']
+        if "attachment" in cipher_message and "attachment_name" in cipher_message:
+            self._attachment = cipher_message["attachment"]
+            self._attachment_name = cipher_message["attachment_name"]

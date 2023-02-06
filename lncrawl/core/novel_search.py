@@ -1,104 +1,126 @@
-# -*- coding: utf-8 -*-
 """
 To search for novels in selected sources
 """
 import logging
 import os
 from concurrent import futures
+from typing import Dict, List
 
-from progress.bar import IncrementalBar
 from slugify import slugify
+from tqdm import tqdm
 
-from ..sources import crawler_list
+from ..core.sources import crawler_list, prepare_crawler
+from ..models import CombinedSearchResult, SearchResult
+
+SEARCH_TIMEOUT = 60
 
 logger = logging.getLogger(__name__)
-
 executor = futures.ThreadPoolExecutor(20)
 
 
-def get_search_result(app, link, bar):
+def _perform_search(app, link, bar):
     try:
-        crawler = crawler_list[link]
-        instance = crawler()
-        instance.home_url = link.strip('/')
-        results = instance.search_novel(app.user_input)
+        crawler = prepare_crawler(link)
+        results = []
+        for item in crawler.search_novel(app.user_input):
+            if not item.get("url"):
+                continue
+            if not isinstance(item, SearchResult):
+                item = SearchResult(**item)
+            results.append(item)
+
         logger.debug(results)
-        logger.info('%d results from %s', len(results), link)
+        logger.info("%d results from %s", len(results), link)
         return results
+    except KeyboardInterrupt as e:
+        raise e
     except Exception:
-        import traceback
-        logger.debug(traceback.format_exc())
-    finally:
-        app.progress += 1
-        bar.next()
-    # end try
-    return []
-# end def
+        if logger.isEnabledFor(logging.DEBUG):
+            logging.exception("<!> Search Failed! << %s >>", link)
+        return []
 
 
-def process_results(combined_results):
-    combined = dict()
-    for result in combined_results:
-        key = slugify(result.get('title') or '')
+def _combine_results(results: List[SearchResult]) -> List[CombinedSearchResult]:
+    combined: Dict[str, List[SearchResult]] = {}
+    for item in results:
+        key = slugify(item.title)
         if len(key) <= 2:
             continue
         combined.setdefault(key, [])
-        combined[key].append(result)
-    # end for
+        combined[key].append(item)
 
-    processed = []
+    processed: List[CombinedSearchResult] = []
     for key, value in combined.items():
-        value.sort(key=lambda x: x['url'])
-        processed.append({
-            'id': key,
-            'title': value[0]['title'],
-            'novels': value
-        })
-    # end for
+        value.sort(key=lambda x: x.url)
+        processed.append(
+            CombinedSearchResult(
+                id=key,
+                title=value[0].title,
+                novels=value,
+            )
+        )
 
-    processed.sort(key=lambda x: -len(x['novels']))
-
+    processed.sort(key=lambda x: -len(x.novels))
     return processed[:15]  # Control the number of results
-# end def
 
 
 def search_novels(app):
+    from .app import App
+
+    assert isinstance(app, App)
+
     if not app.crawler_links:
         return
 
-    bar = IncrementalBar('Searching', max=len(app.crawler_links))
-    if os.getenv('debug_mode') == 'yes':
-        bar.next = lambda n=1: None  # Hide in debug mode
-    else:
-        bar.start()
-    # end if
+    sources = app.crawler_links.copy()
+    # random.shuffle(sources)
+
+    is_debug = os.getenv("debug_mode")
+    bar = tqdm(
+        desc="Searching",
+        total=len(sources),
+        unit="source",
+        disable=is_debug,
+    )
 
     # Add future tasks
     checked = {}
     futures_to_check = []
     app.progress = 0
-    for link in app.crawler_links:
+    for link in sources:
         crawler = crawler_list[link]
         if crawler in checked:
-            logger.info('A crawler for "%s" already exists', link)
-            bar.next()
+            bar.update()
             continue
-        # end if
         checked[crawler] = True
-        future = executor.submit(get_search_result, app, link, bar)
+        future = executor.submit(_perform_search, app, link, bar)
         futures_to_check.append(future)
-    # end for
 
     # Resolve all futures
-    combined_results = [
-        item
-        for f in futures_to_check
-        for item in f.result()
-    ]
+    results: List[SearchResult] = []
+    for i, f in enumerate(futures_to_check):
+        assert isinstance(f, futures.Future)
+        try:
+            f.result(SEARCH_TIMEOUT)
+        except KeyboardInterrupt:
+            break
+        except TimeoutError:
+            f.cancel()
+        except Exception as e:
+            if is_debug:
+                logger.error("Failed to complete search", e)
+        finally:
+            app.progress += 1
+            bar.update()
+
+    # Cancel any remaining futures
+    for f in futures_to_check:
+        assert isinstance(f, futures.Future)
+        if not f.done():
+            f.cancel()
+        elif not f.cancelled():
+            results += f.result()
 
     # Process combined search results
-    app.search_results = process_results(combined_results)
-    bar.clearln()
-    bar.finish()
-    print('Found %d results' % len(app.search_results))
-# end def
+    app.search_results = _combine_results(results)
+    bar.close()
