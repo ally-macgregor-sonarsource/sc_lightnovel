@@ -7,7 +7,7 @@ from ...core import display
 from ...core.arguments import get_args
 from ...core.exeptions import LNException
 
-
+# AM TODO
 def get_novel_url(self):
     """Returns a novel page url or a query"""
     args = get_args()
