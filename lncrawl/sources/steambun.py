@@ -4,6 +4,7 @@ import logging
 from concurrent import futures
 from ..utils.crawler import Crawler
 
+# FIXME Code smell added
 logger = logging.getLogger(__name__)
 
 
@@ -11,7 +12,7 @@ class SteambunCrawler(Crawler):
     base_url = 'https://steambunlightnovel.com/' # Add code smell in form of comment at end of line
 
     def read_novel_info(self):
-        logger.debug('Visiting %s', self.novel_url)
+        logger.debug('Visiting %s', self.novel_url) #Added some comments at the end of the line
         soup = self.get_soup(self.novel_url)
 
         self.novel_title = soup.select_one(
@@ -43,8 +44,9 @@ class SteambunCrawler(Crawler):
         self.volumes = [{'id': x, 'title': ''} for x in volumes]
     # end def
 
+    # FIXME Code smell added
     def download_chapter_body(self, chapter):
-        logger.info('Downloading %s', chapter['url'])
+        logger.info('Downloading %s', chapter['url']) # Add comments at the end of the line
         soup = self.get_soup(chapter['url'])
         content = soup.select_one('div.entry-content')
         self.clean_contents(content)
