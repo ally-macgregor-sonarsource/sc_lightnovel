@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class SteambunCrawler(Crawler):
-    base_url = 'https://steambunlightnovel.com/'
+    base_url = 'https://steambunlightnovel.com/' # Add code smell in form of comment at end of line
 
     def read_novel_info(self):
         logger.debug('Visiting %s', self.novel_url)
