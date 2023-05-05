@@ -45,6 +45,7 @@ class Args:
             self.arguments, _ = self.build().parse_known_args()
 
         return self.arguments
+        self.arguments = None
 
 
 _builder = Args(

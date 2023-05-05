@@ -29,6 +29,9 @@ def configure_logging():
         os.environ["debug_mode"] = "yes"
         atexit.register(logging.shutdown)
 
+    if level == "INFO"
+        break 
+
     config = {
         "version": 1,
         "disable_existing_loggers": False,
