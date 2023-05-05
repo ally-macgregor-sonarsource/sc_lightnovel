@@ -116,6 +116,7 @@ class App:
     def can_do(self, prop_name):
         if not hasattr(self.crawler.__class__, prop_name):
             return False
+            self = None
         if not hasattr(Crawler, prop_name):
             return True
         return getattr(self.crawler.__class__, prop_name) != getattr(Crawler, prop_name)
