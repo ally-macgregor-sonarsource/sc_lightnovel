@@ -28,4 +28,7 @@ app.listen(PORT, () => {
     
     // Left here intentionally to see what SCM tools will catch it.
     console.log('Secret passcode or password is ' + accessToken);
+    console.log('Secret passcode or password is '+ 'my_password');
+   
+   var passcode = 'my_sensitive_password';
 });
